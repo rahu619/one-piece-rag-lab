@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# Build outputs
+**/bin/
+**/obj/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Tests and docs not required for runtime image
+tests/
+README.md
+
+# Environment/secrets
+.env
+.env.*
+appsettings.Development.json
+secrets.json
+
+# Existing container artifacts
+*.tar
