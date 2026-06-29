@@ -4,8 +4,13 @@ services:
     volumes:
       - ..:/workspace:cached
     command: sleep infinity
+    environment:
+      - DOTNET_USE_POLLING_FILE_WATCHER=true
+      - QDRANT_HOST=qdrant
+      - OLLAMA_ENDPOINT=http://ollama:11434
     depends_on:
       - qdrant
+      - ollama
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -15,5 +20,16 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./entrypoint.sh:/entrypoint.sh # Mount the script
+    entrypoint: [ "/usr/bin/bash", "/entrypoint.sh" ] # Override entrypoint
+
 volumes:
   qdrant_data:
+  ollama_data:

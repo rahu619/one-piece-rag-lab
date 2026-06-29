@@ -1,3 +1,5 @@
+using CsvHelper.Configuration.Attributes;
+
 namespace OnePieceApi.Models;
 
 /// <summary>
@@ -5,18 +7,18 @@ namespace OnePieceApi.Models;
 /// </summary>
 public sealed record EpisodeCsvRowRecord
 {
-    /// <summary>
-    /// The title of the episode.
-    /// </summary>
-    public string Title { get; set; } = default!;
-    
-    /// <summary>
-    /// The overview or summary of the episode.
-    /// </summary>
-    public string Overview { get; set; } = default!;
-    
-    /// <summary>
-    /// The arc to which the episode belongs. This field is optional and may be null.
-    /// </summary>
-    public string? Arc { get; set; }
+    [Name("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [Name("season")]
+    public int Season { get; set; }
+
+    [Name("episode")]
+    public int Episode { get; set; }
+
+    [Name("start")]
+    public int StartYear { get; set; }
+
+    [Name("average_rating")]
+    public float AverageRating { get; set; }
 }

@@ -5,36 +5,29 @@ namespace OnePieceApi.Models;
 /// <summary>
 /// Represents an episode record in the One Piece dataset, including its title, overview, arc, and embedding for semantic search.
 /// </summary>
-public sealed record EpisodeRecord
+public class EpisodeRecord
 {
-    /// <summary>
-    /// The unique identifier for the episode record, used as the key in the vector store.
-    /// </summary>
     [VectorStoreKey]
-    public ulong Id { get; init; }
+    public ulong Id { get; set; }
 
-    /// <summary>
-    /// The title of the episode, indexed for search.
-    /// </summary>
-    [VectorStoreData(IsIndexed = true)]
-    public string Title { get; init; } = string.Empty;
+    [VectorStoreData]
+    public string Title { get; set; } = string.Empty;
 
-    /// <summary>
-    /// The overview or summary of the episode, indexed for full-text search.
-    /// </summary>
-    [VectorStoreData(IsFullTextIndexed = true)]
-    public string Overview { get; init; } = string.Empty;
+    [VectorStoreData]
+    public string Overview { get; set; } = string.Empty;
 
-    /// <summary>
-    /// The arc or story arc to which the episode belongs, indexed for search.
-    /// </summary>
-    [VectorStoreData(IsIndexed = true)]
-    public string Arc { get; init; } = string.Empty;
+    [VectorStoreData] // Filterable payload field in Qdrant
+    public int Season { get; set; }
 
-    /// <summary>
-    /// The embedding vector for the episode overview, used for semantic search and similarity comparisons.
-    /// The embedding is generated using a pre-trained model and stored as a read-only memory of floats.    
-    /// </summary>
-    [VectorStoreVector(1536, DistanceFunction = DistanceFunction.CosineDistance)]
-    public ReadOnlyMemory<float> OverviewEmbedding { get; init; }
+    [VectorStoreData] // Filterable payload field in Qdrant
+    public int EpisodeNumber { get; set; }
+
+    [VectorStoreData] // Filterable payload field in Qdrant
+    public int ReleaseYear { get; set; }
+
+    [VectorStoreData] // Filterable payload field in Qdrant
+    public float Rating { get; set; }
+
+    [VectorStoreVector(1536)]
+    public ReadOnlyMemory<float> OverviewEmbedding { get; set; }
 }

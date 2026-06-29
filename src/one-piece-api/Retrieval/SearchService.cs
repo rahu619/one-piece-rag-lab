@@ -13,6 +13,13 @@ public class SearchService(
     IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
     VectorStoreCollection<ulong, EpisodeRecord> collection)
 {
+    private const string DefaultEmbeddingModelId = "qwen2.5-coder:1.5b";
+
+    private static readonly EmbeddingGenerationOptions DefaultEmbeddingOptions =
+    new()
+    {
+        ModelId = DefaultEmbeddingModelId
+    };
     /// <summary>
     /// Searches for episodes based on the provided query string, returning a list of matching EpisodeRecord objects.
     /// </summary>
@@ -21,39 +28,34 @@ public class SearchService(
     /// <param name="embeddingGenerationOptions"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    public async Task<List<EpisodeRecord>> SearchAsync(string query, int limit = 5,
+    public async Task<List<EpisodeRecord>> SearchAsync(
+    string query,
+    int limit = 20, // TopK 
     EmbeddingGenerationOptions? embeddingGenerationOptions = default,
     CancellationToken cancellationToken = default)
+{
+    var options = embeddingGenerationOptions ?? DefaultEmbeddingOptions;
+
+    var queryEmbedding = await embeddingGenerator.GenerateAsync(
+        query,
+        options,
+        cancellationToken);
+
+    var searchOptions = new VectorSearchOptions<EpisodeRecord>();
+
+    var results = collection.SearchAsync(
+        queryEmbedding.Vector,
+        limit,
+        searchOptions,
+        cancellationToken);
+
+    var records = new List<EpisodeRecord>();
+
+    await foreach (var item in results.WithCancellation(cancellationToken))
     {
-        var options = embeddingGenerationOptions ?? new EmbeddingGenerationOptions
-        {
-            ModelId = "text-embedding-3-large"
-        };
-
-        var embedding = await embeddingGenerator.GenerateAsync(
-            query, 
-            options, 
-            cancellationToken);
-
-        // var options = new VectorSearchOptions<EpisodeRecord>
-        // {
-
-        // };
-
-        var results = new List<EpisodeRecord>();
-
-        await foreach (var result in collection.SearchAsync(
-            embedding.Vector, // Use the generated embedding for the query
-            limit,
-            default,
-            cancellationToken))
-        {
-            if (result.Record is not null)
-            {
-                results.Add(result.Record);
-            }
-        }
-
-        return results;
+        records.Add(item.Record);
     }
+
+    return records;
+}
 }

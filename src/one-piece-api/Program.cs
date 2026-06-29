@@ -1,38 +1,41 @@
-﻿using System.ClientModel;
-using Microsoft.Extensions.AI;
+﻿using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.VectorData;
 using Microsoft.SemanticKernel.Connectors.Qdrant;
-using OpenAI;
+using OllamaSharp;
 using OnePieceApi.Ingestion;
 using OnePieceApi.Models;
 using OnePieceApi.Retrieval;
 using Qdrant.Client;
-using Microsoft.Extensions.Configuration;
+
+using static System.Console;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// string openAiKey = builder.Configuration["OpenAI:ApiKey"] ?? "mock-key-for-local-dev";
-// var openAiClient = new OpenAIClient(new ApiKeyCredential(openAiKey));
-// var embeddingClient = openAiClient.GetEmbeddingClient("text-embedding-3-small");
-// builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp => embeddingClient.AsIEmbeddingGenerator());
 
-// TODO: Switch to Ollama later
+// Register the OpenAI-based generator
+// builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
+// {
+//     var config = sp.GetRequiredService<IConfiguration>();
+//     var key = config["OpenAI:ApiKey"] ?? "mock-key-for-local-dev";
+
+//     var client = new OpenAIClient(new ApiKeyCredential(key));
+
+//     return client
+//         .GetEmbeddingClient("text-embedding-3-small")
+//         .AsIEmbeddingGenerator();
+// });
+
+// Register the Ollama-based generator
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
-{
-    var config = sp.GetRequiredService<IConfiguration>();
-    var key = config["OpenAI:ApiKey"] ?? "mock-key-for-local-dev";
+    new OllamaApiClient(new Uri("http://ollama:11434"), "qwen2.5-coder:1.5b"));
 
-    var client = new OpenAIClient(new ApiKeyCredential(key));
+// Get the host from environment variables (will be "qdrant" in Docker) 
+// or default to "localhost" if running locally.
+var qdrantHost = Environment.GetEnvironmentVariable("QDRANT_HOST") ?? "localhost";    
 
-    return client
-        .GetEmbeddingClient("text-embedding-3-small")
-        .AsIEmbeddingGenerator();
-});
-
-
-builder.Services.AddSingleton(new QdrantClient("localhost", 6334));
+builder.Services.AddSingleton(new QdrantClient(qdrantHost, 6334));
 
 builder.Services.AddSingleton<VectorStore>(sp =>
 {
@@ -54,25 +57,36 @@ var host = builder.Build();
 var ingestor = host.Services.GetRequiredService<DatasetIngestor>();
 var searchService = host.Services.GetRequiredService<SearchService>();
 
-Console.WriteLine("🏴‍☠️ one-piece-api Node Initialized.");
-Console.WriteLine("Uncomment the IngestCsvAsync call in Program.cs if running for the first time.");
+WriteLine("🏴‍☠️ one-piece-api Node Initialized.");
+WriteLine("Uncomment the IngestCsvAsync call in Program.cs if running for the first time.");
 
-// await ingestor.IngestCsvAsync("./Data/one_piece.csv");
+try
+{
+    await ingestor.IngestCsvAsync("./data/one_piece_episodes.csv");
+}
+catch (VectorStoreException ex)
+{
+    WriteLine($"Vector Store Error: {ex.Message}");
+    if (ex.InnerException != null)
+    {
+        WriteLine($"Inner Exception: {ex.InnerException.Message}");
+    }
+}
 
 while (true)
 {
-    Console.ForegroundColor = ConsoleColor.Cyan;
-    Console.Write("\nEnter lore search query: ");
-    Console.ResetColor();
+    ForegroundColor = ConsoleColor.Cyan;
+    Write("\nEnter search query: ");
+    ResetColor();
 
-    string? query = Console.ReadLine();
+    string? query = ReadLine();
     if (string.IsNullOrWhiteSpace(query)) break;
 
     var matches = await searchService.SearchAsync(query);
 
     foreach (var episode in matches)
     {
-        Console.WriteLine($"\n[Match] {episode.Title} (Arc: {episode.Arc})");
-        Console.WriteLine($"> {episode.Overview}");
+        WriteLine($"\n[Match] {episode.Title} (Arc: {episode.Season}, Episode: {episode.EpisodeNumber}, Year: {episode.ReleaseYear}, Rating: {episode.Rating})");
+        WriteLine($"> {episode.Overview}");
     }
 }
