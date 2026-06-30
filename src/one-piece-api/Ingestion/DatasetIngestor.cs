@@ -38,7 +38,7 @@ public class DatasetIngestor(
         using var reader = new StreamReader(filePath);
         using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
 
-        var records = csv.GetRecordsAsync<EpisodeCsvRowRecord>(cancellationToken); //.Take(40);
+        var records = csv.GetRecordsAsync<EpisodeCsvRowRecord>(cancellationToken).Take(40);
         var batch = new List<EpisodeCsvRowRecord>();
         ulong idCounter = 1;
 
@@ -63,7 +63,7 @@ public class DatasetIngestor(
 
     private async Task ProcessAndUpsertBatchAsync(List<EpisodeCsvRowRecord> batch, ulong startingId, CancellationToken cancellationToken)
     {
-        // 1. Prepare texts for parallel embedding generation
+        // 1) Prepare texts for parallel embedding generation
         var embeddingTasks = batch.Select(async (row, index) =>
         {
             // Clean semantic text focus solely on textual relevance
@@ -76,18 +76,18 @@ public class DatasetIngestor(
                 Id = startingId + (ulong)index,
                 Title = row.Name,
                 Overview = textToEmbed,
-                Season = row.Season,          // Managed as a filterable property
-                EpisodeNumber = row.Episode,   // Managed as a filterable property
-                ReleaseYear = row.StartYear,   // Managed as a filterable property
-                Rating = row.AverageRating,    // Managed as a filterable property
+                Season = row.Season,          
+                EpisodeNumber = row.Episode,   
+                ReleaseYear = row.StartYear,  
+                Rating = row.AverageRating,    
                 OverviewEmbedding = embeddingResult.Vector
             };
         });
 
-        // 2. Execute all embedding generation HTTP calls concurrently
+        // 2) Execute all embedding generation HTTP calls concurrently
         EpisodeRecord[] recordsToUpsert = await Task.WhenAll(embeddingTasks);
 
-        // 3. Batch upsert into Qdrant in a single database network call
+        // 3) Batch upsert into Qdrant in a single database network call
         // Depending on your SDK version, you can loop or use a native batch API if exposed:
         foreach (var record in recordsToUpsert)
         {

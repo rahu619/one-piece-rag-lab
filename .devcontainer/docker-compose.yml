@@ -7,7 +7,11 @@ services:
     environment:
       - DOTNET_USE_POLLING_FILE_WATCHER=true
       - QDRANT_HOST=qdrant
-      - OLLAMA_ENDPOINT=http://ollama:11434
+      # Environment variables required for the application
+      - Ollama__BaseUrl=http://ollama:11434
+      - Ollama__ModelId=qwen2.5-coder:1.5b
+      - Ingestion__RunOnStart=true
+      - Ingestion__CsvFilePath=./data/one_piece_episodes.csv
     depends_on:
       - qdrant
       - ollama

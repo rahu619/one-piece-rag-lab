@@ -16,16 +16,16 @@ public class EpisodeRecord
     [VectorStoreData]
     public string Overview { get; set; } = string.Empty;
 
-    [VectorStoreData] // Filterable payload field in Qdrant
+    [VectorStoreData] 
     public int Season { get; set; }
 
-    [VectorStoreData] // Filterable payload field in Qdrant
+    [VectorStoreData] 
     public int EpisodeNumber { get; set; }
 
-    [VectorStoreData] // Filterable payload field in Qdrant
+    [VectorStoreData] 
     public int ReleaseYear { get; set; }
 
-    [VectorStoreData] // Filterable payload field in Qdrant
+    [VectorStoreData]
     public float Rating { get; set; }
 
     [VectorStoreVector(1536)]
