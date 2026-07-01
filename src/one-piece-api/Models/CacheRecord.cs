@@ -19,6 +19,6 @@ public class CacheRecord
     [VectorStoreData]
     public string SourcesJson { get; set; } = string.Empty;
 
-    [VectorStoreVector(1536, DistanceFunction = DistanceFunction.CosineSimilarity)]
+    [VectorStoreVector(Dimensions: 1536, DistanceFunction = DistanceFunction.CosineSimilarity)]
     public ReadOnlyMemory<float> QueryEmbedding { get; set; }
 }
