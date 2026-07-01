@@ -51,4 +51,14 @@ public record SemanticCacheOptions
 public record InputFilterOptions
 {
     public bool Enabled { get; set; } = true;
+    public string ClassificationPrompt { get; set; } = """
+        You are a query router. Classify the user query into exactly one of two categories:
+        - "ONE_PIECE" (if the query is asking about the anime/manga One Piece, episodes, characters, plot, ratings, etc.)
+        - "GENERAL" (if the query is a greeting, general chitchat, help request, or a general knowledge/coding/math/physics/geography question not about One Piece)
+
+        Respond with exactly one word: either "ONE_PIECE" or "GENERAL". Do not write anything else.
+
+        Query: {query}
+        Category:
+        """;
 }

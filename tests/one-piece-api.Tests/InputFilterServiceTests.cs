@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using one_piece_api.Tests.Mocks;
+using OnePieceApi.Config;
 using OnePieceApi.Retrieval;
 using Xunit;
 
@@ -23,7 +24,7 @@ public class InputFilterServiceTests
     public async Task ClassifyQueryAsync_RoutesGeneralAndOutofDomainQueries_AsGeneral(string input)
     {
         // Arrange
-        var service = new InputFilterService(_chatClient);
+        var service = new InputFilterService(_chatClient, new InputFilterOptions());
 
         // Act
         var intent = await service.ClassifyQueryAsync(input);
@@ -41,7 +42,7 @@ public class InputFilterServiceTests
     public async Task ClassifyQueryAsync_RoutesOnePieceQueries_AsOnePiece(string input)
     {
         // Arrange
-        var service = new InputFilterService(_chatClient);
+        var service = new InputFilterService(_chatClient, new InputFilterOptions());
 
         // Act
         var intent = await service.ClassifyQueryAsync(input);
@@ -57,7 +58,7 @@ public class InputFilterServiceTests
     public async Task ClassifyQueryAsync_RoutesEmptyInput_AsGeneral(string? input)
     {
         // Arrange
-        var service = new InputFilterService(_chatClient);
+        var service = new InputFilterService(_chatClient, new InputFilterOptions());
 
         // Act
         var intent = await service.ClassifyQueryAsync(input!);
