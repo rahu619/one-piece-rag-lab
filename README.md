@@ -1,6 +1,6 @@
 # One Piece RAG API
 
-A .NET 9 console application demonstrating Retrieval-Augmented Generation (RAG) over One Piece episode summaries. The application uses a local Ollama client for both embedding generation and text completion, paired with a Qdrant vector store for high-performance retrieval and semantic caching.
+A .NET 10 console application demonstrating a **Hybrid SQL-RAG Agent** over One Piece episode summaries. The application uses a local Ollama client for query routing, SQL generation, and text completion, paired with a local SQLite database for structured data calculations and a Qdrant vector store for high-performance semantic retrieval and caching.
 
 ---
 
@@ -12,26 +12,28 @@ flowchart TD
     P --> EMB[IEmbeddingGenerator<br/>Ollama: qwen2.5-coder:1.5b]
     EMB --> CACHE{Semantic Cache Hit?}
     CACHE -- "Yes (Score >= threshold)" --> RETURN[Instant Cached Answer + Sources]
-    CACHE -- No --> DB[(Qdrant Main Store<br/>one_piece_episodes)]
-    DB --> LLM[IChatClient<br/>Ollama: qwen2.5-coder:1.5b]
-    LLM --> PRINT[Stream LLM Answer]
-    PRINT --> SAVE[Save to one_piece_cache]
-    
-    CSV[one_piece_episodes.csv] --> INGEST[DatasetIngestor]
-    INGEST --> EMB
-    INGEST --> DB
+    CACHE -- No --> ROUTER{Intent Router<br/>qwen2.5-coder:1.5b}
+    ROUTER -- "GENERAL" --> Direct[Direct Completion]
+    ROUTER -- "SQL" --> SQLGen[Write & Run SQL on SQLite]
+    ROUTER -- "VECTOR" --> VecGen[Vector Search on Qdrant]
+    SQLGen --> LLM[IChatClient<br/>Ollama: qwen2.5-coder:1.5b]
+    VecGen --> LLM
+    Direct --> PRINT[Stream Answer]
+    LLM --> PRINT
+    PRINT --> SAVE[Save to Cache]
 ```
 
 ---
 
 ## Project Layout
 
-- `src/one-piece-api/Program.cs`: Composition root, dependency injection configuration, and interactive query loop.
-- `src/one-piece-api/Ingestion/DatasetIngestor.cs`: Reads episode metadata from CSV, generates embeddings, and indexes them into Qdrant.
-- `src/one-piece-api/Retrieval/SearchService.cs`: Queries the database for similar episodes using text queries or precomputed vector embeddings.
-- `src/one-piece-api/Retrieval/SemanticCacheService.cs`: Handles cache hits and saves responses in Qdrant with deterministic FNV-1a query hashing.
+- `src/one-piece-api/Program.cs`: Composition root, dependency injection configuration, and the prompt-driven router/executor query loop.
+- `src/one-piece-api/Ingestion/DatasetIngestor.cs`: Seeds episode records into both SQLite and the Qdrant vector index on start.
+- `src/one-piece-api/Retrieval/SqliteDatabaseService.cs`: Manages schema creation, inserts, and executing read-only SELECT statements on local SQLite.
+- `src/one-piece-api/Retrieval/SearchService.cs`: Queries the Qdrant database for similar episodes using vector embeddings.
+- `src/one-piece-api/Retrieval/SemanticCacheService.cs`: Handles cache checks and saves responses in Qdrant with deterministic FNV-1a query hashing.
 - `src/one-piece-api/Models/EpisodeRecord.cs`: Schema for episodes in the database.
-- `src/one-piece-api/Models/CacheRecord.cs`: Schema for cached query-answer pairs in the database.
+- `src/one-piece-api/Models/CacheRecord.cs`: Schema for cached query-answer pairs.
 - `src/one-piece-api/Models/ConfigOptions.cs`: Strongly-typed settings records.
 - `src/one-piece-api/Data/one_piece_episodes.csv`: Source dataset containing episode titles and details.
 
@@ -78,7 +80,7 @@ Settings are configured in `src/one-piece-api/appsettings.json`:
 }
 ```
 
-- `Ingestion:RunOnStart`: Automatically resets and rebuilds the episode vector database from the CSV on start. Set to `false` after the first run to preserve indexing.
+- `Ingestion:RunOnStart`: Automatically resets and rebuilds both SQLite tables and the episode vector database from the CSV on start.
 - `SemanticCache:Enabled`: Turns semantic caching on or off.
 - `SemanticCache:SimilarityThreshold`: The minimum cosine similarity score (typically `0.95` or higher) required to trigger a cache hit.
 
@@ -91,10 +93,9 @@ To run the interactive CLI query session:
 ```bash
 dotnet run --project src/one-piece-api/one-piece-api.csproj
 ```
-*(Make sure to execute the command from the `src/one-piece-api` directory or configure the environment variables correctly so `appsettings.json` is located).*
 
 ### Run Unit Tests
-We use xUnit for unit and integration testing:
+We use xUnit for testing:
 ```bash
-dotnet test tests/one-piece-api.Tests/one-piece-api.Tests.csproj
+dotnet test
 ```

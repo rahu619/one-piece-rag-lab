@@ -45,9 +45,7 @@ builder.Services.AddSingleton<VectorStore>(sp =>
 var cacheOptions = builder.Configuration.GetSection("SemanticCache").Get<SemanticCacheOptions>() ?? new SemanticCacheOptions();
 builder.Services.AddSingleton(cacheOptions);
 
-// Bind and register InputFilterOptions
-var filterOptions = builder.Configuration.GetSection("InputFilter").Get<InputFilterOptions>() ?? new InputFilterOptions();
-builder.Services.AddSingleton(filterOptions);
+
 
 builder.Services.AddSingleton<VectorStoreCollection<ulong, EpisodeRecord>>(sp =>
 {
