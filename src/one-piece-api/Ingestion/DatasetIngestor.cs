@@ -14,13 +14,14 @@ namespace OnePieceApi.Ingestion;
 /// <param name="collection"></param>
 public class DatasetIngestor(
     IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
-    VectorStoreCollection<ulong, EpisodeRecord> collection)
+    VectorStoreCollection<ulong, EpisodeRecord> collection,
+    OnePieceApi.Retrieval.SqliteDatabaseService sqliteDatabaseService)
 {
 
     private const int BatchSize = 50;
 
     /// <summary>
-    /// Ingests episode data from a CSV file, generating embeddings for the overviews and storing them in the vector store collection.
+    /// Ingests episode data from a CSV file, generating embeddings for the overviews and storing them in the vector store collection and SQLite.
     /// </summary>
     /// <param name="filePath"></param>
     /// <returns></returns>
@@ -34,6 +35,10 @@ public class DatasetIngestor(
         // Re-create it fresh using your EpisodeRecord schema attributes
         await collection.EnsureCollectionExistsAsync(cancellationToken);
         WriteLine("Fresh collection recreated and ready for indexing!");
+
+        // Initialize SQL database fresh
+        sqliteDatabaseService.InitializeDatabase();
+        WriteLine("SQLite database initialized successfully.");
 
         using var reader = new StreamReader(filePath);
         using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
@@ -92,6 +97,7 @@ public class DatasetIngestor(
         foreach (var record in recordsToUpsert)
         {
             await collection.UpsertAsync(record, cancellationToken);
+            sqliteDatabaseService.InsertEpisode(record);
         }
 
         WriteLine($"[Ingestor] Successfully processed and batched index slice: {batch.Count} elements.");
