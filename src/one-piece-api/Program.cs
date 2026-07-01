@@ -60,6 +60,7 @@ builder.Services.AddSingleton<VectorStoreCollection<ulong, CacheRecord>>(sp =>
 builder.Services.AddTransient<DatasetIngestor>();
 builder.Services.AddTransient<SearchService>();
 builder.Services.AddSingleton<SemanticCacheService>();
+builder.Services.AddSingleton<InputFilterService>();
 
 var host = builder.Build();
 
@@ -68,6 +69,7 @@ var searchService = host.Services.GetRequiredService<SearchService>();
 var chatClient = host.Services.GetRequiredService<IChatClient>(); // Get the LLM client
 var embeddingGenerator = host.Services.GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>();
 var semanticCache = host.Services.GetRequiredService<SemanticCacheService>();
+var inputFilter = host.Services.GetRequiredService<InputFilterService>();
 
 // Ensure the cache collection exists
 if (cacheOptions.Enabled)
@@ -107,6 +109,20 @@ while (true)
 
     string? query = ReadLine();
     if (string.IsNullOrWhiteSpace(query)) break;
+
+    var filterResult = inputFilter.FilterInput(query);
+    if (filterResult.IsFiltered)
+    {
+        ForegroundColor = ConsoleColor.Blue;
+        WriteLine($"\n[Input Filtered]");
+        ResetColor();
+
+        ForegroundColor = ConsoleColor.Green;
+        Write("\n[Answer]: ");
+        WriteLine(filterResult.Response);
+        ResetColor();
+        continue;
+    }
 
     // 1) Generate the query embedding
     var queryEmbeddingResult = await embeddingGenerator.GenerateAsync(query);
