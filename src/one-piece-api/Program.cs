@@ -193,8 +193,11 @@ while (true)
             continue;
         }
 
+        // Sort the matches by rating descending to assist the LLM in comparison tasks
+        var sortedMatches = matches.OrderByDescending(e => e.Rating).ToList();
+
         // 2) Format the vector results into text data for the LLM context window
-        var contextData = string.Join("\n", matches.Select(e =>
+        var contextData = string.Join("\n", sortedMatches.Select(e =>
             $"- Title: {e.Title}, Season: {e.Season}, Episode: {e.EpisodeNumber}, Year: {e.ReleaseYear}, Rating: {e.Rating}\n  Overview: {e.Overview}"));
 
         // 3) Construct a prompt that forces the LLM to ground its response in your data
@@ -202,7 +205,7 @@ while (true)
                       You are an expert One Piece assistant. Answer the user's question accurately using ONLY the provided context dataset below. 
                       If the user asks for a specific episode (like the "best" or "highest rated"), evaluate the attributes (like Rating) in the dataset to give a singular definitive answer.
 
-                      Context Dataset:
+                      Context Dataset (ordered from highest rating to lowest rating):
                       {contextData}
 
                       User Question: {query}
