@@ -45,6 +45,8 @@ builder.Services.AddSingleton<VectorStore>(sp =>
 var cacheOptions = builder.Configuration.GetSection("SemanticCache").Get<SemanticCacheOptions>() ?? new SemanticCacheOptions();
 builder.Services.AddSingleton(cacheOptions);
 
+
+
 builder.Services.AddSingleton<VectorStoreCollection<ulong, EpisodeRecord>>(sp =>
 {
     var store = sp.GetRequiredService<VectorStore>();
@@ -60,6 +62,7 @@ builder.Services.AddSingleton<VectorStoreCollection<ulong, CacheRecord>>(sp =>
 builder.Services.AddTransient<DatasetIngestor>();
 builder.Services.AddTransient<SearchService>();
 builder.Services.AddSingleton<SemanticCacheService>();
+builder.Services.AddSingleton<SqliteDatabaseService>();
 
 var host = builder.Build();
 
@@ -75,6 +78,8 @@ if (cacheOptions.Enabled)
     var cacheCollection = host.Services.GetRequiredService<VectorStoreCollection<ulong, CacheRecord>>();
     await cacheCollection.EnsureCollectionExistsAsync();
 }
+
+
 
 WriteLine("One-piece-api Node Initialized.");
 
@@ -99,50 +104,56 @@ else
     WriteLine("Data ingestion skipped. Using current vector data inside database index.");
 }
 
-while (true)
-{
-    ForegroundColor = ConsoleColor.Cyan;
-    Write("\nEnter search query: ");
-    ResetColor();
-
-    string? query = ReadLine();
-    if (string.IsNullOrWhiteSpace(query)) break;
-
-    // 1) Generate the query embedding
-    var queryEmbeddingResult = await embeddingGenerator.GenerateAsync(query);
-    var queryVector = queryEmbeddingResult.Vector;
-
-    bool isHit = false;
-    string? cachedAnswer = null;
-    List<EpisodeRecord>? cachedSources = null;
-    double? similarityScore = null;
-
-    if (cacheOptions.Enabled)
+    while (true)
     {
-        (isHit, cachedAnswer, cachedSources, similarityScore) = await semanticCache.GetCachedResponseAsync(
-            query,
-            queryVector,
-            cacheOptions.SimilarityThreshold);
-    }
-
-    List<EpisodeRecord> matches;
-
-    if (isHit && cachedAnswer != null && cachedSources != null)
-    {
-        ForegroundColor = ConsoleColor.Magenta;
-        WriteLine($"\n[Semantic Cache Hit] (Similarity: {similarityScore:F4})");
+        ForegroundColor = ConsoleColor.Cyan;
+        Write("\nEnter search query: ");
         ResetColor();
 
-        ForegroundColor = ConsoleColor.Green;
-        Write("\n[Answer]: ");
-        Write(cachedAnswer);
-        WriteLine();
-        ResetColor();
+        string? query = ReadLine();
+        if (string.IsNullOrWhiteSpace(query)) break;
 
-        matches = cachedSources;
-    }
-    else
-    {
+        // 1) Precompute query embedding for the semantic cache lookup
+        var queryEmbeddingResult = await embeddingGenerator.GenerateAsync(query);
+        var queryVector = queryEmbeddingResult.Vector;
+
+        bool isHit = false;
+        string? cachedAnswer = null;
+        List<EpisodeRecord>? cachedSources = null;
+        double? similarityScore = null;
+
+        if (cacheOptions.Enabled)
+        {
+            (isHit, cachedAnswer, cachedSources, similarityScore) = await semanticCache.GetCachedResponseAsync(
+                query,
+                queryVector,
+                cacheOptions.SimilarityThreshold);
+        }
+
+        if (isHit && cachedAnswer != null && cachedSources != null)
+        {
+            ForegroundColor = ConsoleColor.Magenta;
+            WriteLine($"\n[Semantic Cache Hit] (Similarity: {similarityScore:F4})");
+            ResetColor();
+
+            ForegroundColor = ConsoleColor.Green;
+            Write("\n[Answer]: ");
+            Write(cachedAnswer);
+            WriteLine();
+            ResetColor();
+
+            if (cachedSources.Any())
+            {
+                WriteLine("\n--- Sources Used ---");
+                foreach (var episode in cachedSources)
+                {
+                    WriteLine($"* {episode.Title} (Rating: {episode.Rating})");
+                }
+            }
+            continue;
+        }
+
+        // Cache Miss -> Process via Intent Routing
         if (cacheOptions.Enabled)
         {
             ForegroundColor = ConsoleColor.Yellow;
@@ -150,64 +161,165 @@ while (true)
             ResetColor();
         }
 
-        // Retrieve the closest matching context items from Qdrant using the precomputed embedding
-        matches = await searchService.SearchAsync(queryVector, limit: 5);
+        // 2) Classify the query intent using the LLM router
+        var classificationPrompt = $"""
+            You are a query router. Classify the user query into exactly one of three categories:
+            - "SQL" (if the query requires analytical or quantitative calculations, counts, averages, sorting, or groupings about ratings, episodes, seasons, or release years)
+            - "VECTOR" (if the query is asking about character descriptions, storylines, plot details, relationships, or what happens in the episodes)
+            - "GENERAL" (if the query is a greeting, general chitchat, help request, or a general knowledge/coding question not about One Piece)
 
-        if (!matches.Any())
-        {
-            WriteLine("No matching episodes found.");
-            continue;
-        }
+            Respond with exactly one word: either "SQL", "VECTOR", or "GENERAL". Do not write anything else.
 
-        // 2) Format the vector results into text data for the LLM context window
-        var contextData = string.Join("\n", matches.Select(e =>
-            $"- Title: {e.Title}, Season: {e.Season}, Episode: {e.EpisodeNumber}, Year: {e.ReleaseYear}, Rating: {e.Rating}\n  Overview: {e.Overview}"));
-
-        // 3) Construct a prompt that forces the LLM to ground its response in your data
-        var prompt = $"""
-                      You are an expert One Piece assistant. Answer the user's question accurately using ONLY the provided context dataset below. 
-                      If the user asks for a specific episode (like the "best" or "highest rated"), evaluate the attributes (like Rating) in the dataset to give a singular definitive answer.
-
-                      Context Dataset:
-                      {contextData}
-
-                      User Question: {query}
-                      Answer:
-                      """;
+            Query: {query}
+            Category:
+            """;
 
         ForegroundColor = ConsoleColor.Yellow;
-        WriteLine("\nThinking...");
+        WriteLine("Routing query...");
         ResetColor();
 
-        // 4) Stream the finalized single answer
-        var responseStream = chatClient.GetStreamingResponseAsync(prompt);
+        var routingResponse = await chatClient.GetResponseAsync(classificationPrompt);
+        var intent = routingResponse.Text.Trim().ToUpperInvariant();
 
-        ForegroundColor = ConsoleColor.Green;
-        Write("\n[Answer]: "); // Print the label ONCE before the loop starts
-
-        var sb = new System.Text.StringBuilder();
-        await foreach (var update in responseStream)
+        if (intent.Contains("SQL"))
         {
-            Write(update.Text);
-            sb.Append(update.Text);
+            ForegroundColor = ConsoleColor.Yellow;
+            WriteLine("\n[Route: SQL Database Query]");
+            ResetColor();
+
+            var sqlPrompt = $"""
+                You are a SQLite query generator. Write a single SQLite SELECT statement to answer the user query.
+                Database schema:
+                Table: Episodes (
+                    Id INT,
+                    Title TEXT,
+                    Overview TEXT,
+                    Season INT,
+                    EpisodeNumber INT,
+                    ReleaseYear INT,
+                    Rating REAL
+                )
+
+                Respond with ONLY the raw SQL query. Do not write markdown, explanations, or any other text.
+
+                Query: {query}
+                SQL:
+                """;
+
+            var sqlGenResponse = await chatClient.GetResponseAsync(sqlPrompt);
+            var sqlQuery = sqlGenResponse.Text.Trim();
+            
+            // Clean up code block formats
+            if (sqlQuery.StartsWith("```sql")) sqlQuery = sqlQuery.Substring(6);
+            if (sqlQuery.StartsWith("```")) sqlQuery = sqlQuery.Substring(3);
+            if (sqlQuery.EndsWith("```")) sqlQuery = sqlQuery.Substring(0, sqlQuery.Length - 3);
+            sqlQuery = sqlQuery.Trim();
+
+            ForegroundColor = ConsoleColor.Blue;
+            WriteLine($"Executing SQL: {sqlQuery}");
+            ResetColor();
+
+            var dbService = host.Services.GetRequiredService<SqliteDatabaseService>();
+            var sqlResult = dbService.ExecuteSqlQuery(sqlQuery);
+
+            var answerPrompt = $"""
+                You are an expert One Piece assistant. Answer the user's question accurately using the structured SQLite database results provided below.
+
+                Database Results:
+                {sqlResult}
+
+                User Question: {query}
+                Answer:
+                """;
+
+            ForegroundColor = ConsoleColor.Green;
+            Write("\n[Answer]: ");
+            var responseStream = chatClient.GetStreamingResponseAsync(answerPrompt);
+            var sb = new System.Text.StringBuilder();
+            await foreach (var update in responseStream)
+            {
+                Write(update.Text);
+                sb.Append(update.Text);
+            }
+            WriteLine();
+            ResetColor();
+
+            if (cacheOptions.Enabled)
+            {
+                await semanticCache.SaveToCacheAsync(query, queryVector, sb.ToString(), new List<EpisodeRecord>());
+            }
         }
-
-        WriteLine();
-        ResetColor();
-
-        var answerText = sb.ToString();
-
-        // Save response to semantic cache
-        if (cacheOptions.Enabled)
+        else if (intent.Contains("VECTOR"))
         {
-            await semanticCache.SaveToCacheAsync(query, queryVector, answerText, matches);
+            ForegroundColor = ConsoleColor.Yellow;
+            WriteLine("\n[Route: Semantic Vector Search]");
+            ResetColor();
+
+            var matches = await searchService.SearchAsync(queryVector, limit: 5);
+            if (!matches.Any())
+            {
+                WriteLine("No matching episodes found.");
+                continue;
+            }
+
+            var sortedMatches = matches.OrderByDescending(e => e.Rating).ToList();
+            var contextData = string.Join("\n", sortedMatches.Select(e =>
+                $"- Title: {e.Title}, Season: {e.Season}, Episode: {e.EpisodeNumber}, Year: {e.ReleaseYear}, Rating: {e.Rating}\n  Overview: {e.Overview}"));
+
+            var answerPrompt = $"""
+                You are an expert One Piece assistant. Answer the user's question accurately using ONLY the provided context dataset below.
+
+                Context Dataset (ordered from highest rating to lowest rating):
+                {contextData}
+
+                User Question: {query}
+                Answer:
+                """;
+
+            ForegroundColor = ConsoleColor.Green;
+            Write("\n[Answer]: ");
+            var responseStream = chatClient.GetStreamingResponseAsync(answerPrompt);
+            var sb = new System.Text.StringBuilder();
+            await foreach (var update in responseStream)
+            {
+                Write(update.Text);
+                sb.Append(update.Text);
+            }
+            WriteLine();
+            ResetColor();
+
+            if (cacheOptions.Enabled)
+            {
+                await semanticCache.SaveToCacheAsync(query, queryVector, sb.ToString(), sortedMatches);
+            }
+
+            WriteLine("\n--- Sources Used ---");
+            foreach (var episode in sortedMatches)
+            {
+                WriteLine($"* {episode.Title} (Rating: {episode.Rating})");
+            }
+        }
+        else
+        {
+            ForegroundColor = ConsoleColor.Yellow;
+            WriteLine("\n[Route: General Conversation]");
+            ResetColor();
+
+            ForegroundColor = ConsoleColor.Green;
+            Write("\n[Answer]: ");
+            var responseStream = chatClient.GetStreamingResponseAsync(query);
+            var sb = new System.Text.StringBuilder();
+            await foreach (var update in responseStream)
+            {
+                Write(update.Text);
+                sb.Append(update.Text);
+            }
+            WriteLine();
+            ResetColor();
+
+            if (cacheOptions.Enabled)
+            {
+                await semanticCache.SaveToCacheAsync(query, queryVector, sb.ToString(), new List<EpisodeRecord>());
+            }
         }
     }
-
-    // 5) Print references underneath the answer
-    WriteLine("\n--- Sources Used ---");
-    foreach (var episode in matches)
-    {
-        WriteLine($"* {episode.Title} (Rating: {episode.Rating})");
-    }
-}

@@ -33,7 +33,7 @@ public class SearchService(
     /// </summary>
     public async Task<List<EpisodeRecord>> SearchAsync(
         ReadOnlyMemory<float> queryVector,
-        int limit = 20,
+        int limit = 5, // TopK 
         CancellationToken cancellationToken = default)
     {
         var searchOptions = new VectorSearchOptions<EpisodeRecord>();
@@ -64,7 +64,7 @@ public class SearchService(
     /// <returns></returns>
     public async Task<List<EpisodeRecord>> SearchAsync(
         string query,
-        int limit = 20, // TopK 
+        int limit = 5, // TopK 
         EmbeddingGenerationOptions? embeddingGenerationOptions = default,
         CancellationToken cancellationToken = default)
     {
