@@ -28,34 +28,53 @@ public class SearchService(
     /// <param name="embeddingGenerationOptions"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
+    /// <summary>
+    /// Searches for episodes based on the precomputed query embedding.
+    /// </summary>
     public async Task<List<EpisodeRecord>> SearchAsync(
-    string query,
-    int limit = 20, // TopK 
-    EmbeddingGenerationOptions? embeddingGenerationOptions = default,
-    CancellationToken cancellationToken = default)
-{
-    var options = embeddingGenerationOptions ?? DefaultEmbeddingOptions;
-
-    var queryEmbedding = await embeddingGenerator.GenerateAsync(
-        query,
-        options,
-        cancellationToken);
-
-    var searchOptions = new VectorSearchOptions<EpisodeRecord>();
-
-    var results = collection.SearchAsync(
-        queryEmbedding.Vector,
-        limit,
-        searchOptions,
-        cancellationToken);
-
-    var records = new List<EpisodeRecord>();
-
-    await foreach (var item in results.WithCancellation(cancellationToken))
+        ReadOnlyMemory<float> queryVector,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
     {
-        records.Add(item.Record);
+        var searchOptions = new VectorSearchOptions<EpisodeRecord>();
+
+        var results = collection.SearchAsync(
+            queryVector,
+            limit,
+            searchOptions,
+            cancellationToken);
+
+        var records = new List<EpisodeRecord>();
+
+        await foreach (var item in results.WithCancellation(cancellationToken))
+        {
+            records.Add(item.Record);
+        }
+
+        return records;
     }
 
-    return records;
-}
+    /// <summary>
+    /// Searches for episodes based on the provided query string, returning a list of matching EpisodeRecord objects.
+    /// </summary>
+    /// <param name="query"></param>
+    /// <param name="limit"></param>
+    /// <param name="embeddingGenerationOptions"></param>
+    /// <param name="cancellationToken"></param>
+    /// <returns></returns>
+    public async Task<List<EpisodeRecord>> SearchAsync(
+        string query,
+        int limit = 20, // TopK 
+        EmbeddingGenerationOptions? embeddingGenerationOptions = default,
+        CancellationToken cancellationToken = default)
+    {
+        var options = embeddingGenerationOptions ?? DefaultEmbeddingOptions;
+
+        var queryEmbedding = await embeddingGenerator.GenerateAsync(
+            query,
+            options,
+            cancellationToken);
+
+        return await SearchAsync(queryEmbedding.Vector, limit, cancellationToken);
+    }
 }

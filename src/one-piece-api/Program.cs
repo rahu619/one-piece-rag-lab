@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.AI;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -41,20 +41,40 @@ builder.Services.AddSingleton<VectorStore>(sp =>
     return new QdrantVectorStore(client, true);
 });
 
+// Bind and register SemanticCacheOptions
+var cacheOptions = builder.Configuration.GetSection("SemanticCache").Get<SemanticCacheOptions>() ?? new SemanticCacheOptions();
+builder.Services.AddSingleton(cacheOptions);
+
 builder.Services.AddSingleton<VectorStoreCollection<ulong, EpisodeRecord>>(sp =>
 {
     var store = sp.GetRequiredService<VectorStore>();
     return store.GetCollection<ulong, EpisodeRecord>("one_piece_episodes");
 });
 
+builder.Services.AddSingleton<VectorStoreCollection<ulong, CacheRecord>>(sp =>
+{
+    var store = sp.GetRequiredService<VectorStore>();
+    return store.GetCollection<ulong, CacheRecord>(cacheOptions.CollectionName);
+});
+
 builder.Services.AddTransient<DatasetIngestor>();
 builder.Services.AddTransient<SearchService>();
+builder.Services.AddSingleton<SemanticCacheService>();
 
 var host = builder.Build();
 
 var ingestor = host.Services.GetRequiredService<DatasetIngestor>();
 var searchService = host.Services.GetRequiredService<SearchService>();
 var chatClient = host.Services.GetRequiredService<IChatClient>(); // Get the LLM client
+var embeddingGenerator = host.Services.GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>();
+var semanticCache = host.Services.GetRequiredService<SemanticCacheService>();
+
+// Ensure the cache collection exists
+if (cacheOptions.Enabled)
+{
+    var cacheCollection = host.Services.GetRequiredService<VectorStoreCollection<ulong, CacheRecord>>();
+    await cacheCollection.EnsureCollectionExistsAsync();
+}
 
 WriteLine("One-piece-api Node Initialized.");
 
@@ -88,49 +108,101 @@ while (true)
     string? query = ReadLine();
     if (string.IsNullOrWhiteSpace(query)) break;
 
-    // 1) Retrieve the closest matching context items from Qdrant
-    var matches = await searchService.SearchAsync(query, limit: 5);
+    // 1) Generate the query embedding
+    var queryEmbeddingResult = await embeddingGenerator.GenerateAsync(query);
+    var queryVector = queryEmbeddingResult.Vector;
 
-    if (!matches.Any())
+    bool isHit = false;
+    string? cachedAnswer = null;
+    List<EpisodeRecord>? cachedSources = null;
+    double? similarityScore = null;
+
+    if (cacheOptions.Enabled)
     {
-        WriteLine("No matching episodes found.");
-        continue;
+        (isHit, cachedAnswer, cachedSources, similarityScore) = await semanticCache.GetCachedResponseAsync(
+            query,
+            queryVector,
+            cacheOptions.SimilarityThreshold);
     }
 
-    // 2) Format the vector results into text data for the LLM context window
-    var contextData = string.Join("\n", matches.Select(e =>
-        $"- Title: {e.Title}, Season: {e.Season}, Episode: {e.EpisodeNumber}, Year: {e.ReleaseYear}, Rating: {e.Rating}\n  Overview: {e.Overview}"));
+    List<EpisodeRecord> matches;
 
-    // 3) Construct a prompt that forces the LLM to ground its response in your data
-    var prompt = $"""
-                  You are an expert One Piece assistant. Answer the user's question accurately using ONLY the provided context dataset below. 
-                  If the user asks for a specific episode (like the "best" or "highest rated"), evaluate the attributes (like Rating) in the dataset to give a singular definitive answer.
-
-                  Context Dataset:
-                  {contextData}
-
-                  User Question: {query}
-                  Answer:
-                  """;
-
-    ForegroundColor = ConsoleColor.Yellow;
-    WriteLine("\nThinking...");
-    ResetColor();
-
-    // 4) Stream the finalized single answer
-    var responseStream = chatClient.GetStreamingResponseAsync(prompt);
-
-    ForegroundColor = ConsoleColor.Green;
-    Write("\n[Answer]: "); // Print the label ONCE before the loop starts
-
-    await foreach (var update in responseStream)
+    if (isHit && cachedAnswer != null && cachedSources != null)
     {
-        // To print tokens print side-by-side.
-        Write(update.Text);
-    }
+        ForegroundColor = ConsoleColor.Magenta;
+        WriteLine($"\n[Semantic Cache Hit] (Similarity: {similarityScore:F4})");
+        ResetColor();
 
-    WriteLine();
-    ResetColor();
+        ForegroundColor = ConsoleColor.Green;
+        Write("\n[Answer]: ");
+        Write(cachedAnswer);
+        WriteLine();
+        ResetColor();
+
+        matches = cachedSources;
+    }
+    else
+    {
+        if (cacheOptions.Enabled)
+        {
+            ForegroundColor = ConsoleColor.Yellow;
+            WriteLine("\n[Semantic Cache Miss] Processing query...");
+            ResetColor();
+        }
+
+        // Retrieve the closest matching context items from Qdrant using the precomputed embedding
+        matches = await searchService.SearchAsync(queryVector, limit: 5);
+
+        if (!matches.Any())
+        {
+            WriteLine("No matching episodes found.");
+            continue;
+        }
+
+        // 2) Format the vector results into text data for the LLM context window
+        var contextData = string.Join("\n", matches.Select(e =>
+            $"- Title: {e.Title}, Season: {e.Season}, Episode: {e.EpisodeNumber}, Year: {e.ReleaseYear}, Rating: {e.Rating}\n  Overview: {e.Overview}"));
+
+        // 3) Construct a prompt that forces the LLM to ground its response in your data
+        var prompt = $"""
+                      You are an expert One Piece assistant. Answer the user's question accurately using ONLY the provided context dataset below. 
+                      If the user asks for a specific episode (like the "best" or "highest rated"), evaluate the attributes (like Rating) in the dataset to give a singular definitive answer.
+
+                      Context Dataset:
+                      {contextData}
+
+                      User Question: {query}
+                      Answer:
+                      """;
+
+        ForegroundColor = ConsoleColor.Yellow;
+        WriteLine("\nThinking...");
+        ResetColor();
+
+        // 4) Stream the finalized single answer
+        var responseStream = chatClient.GetStreamingResponseAsync(prompt);
+
+        ForegroundColor = ConsoleColor.Green;
+        Write("\n[Answer]: "); // Print the label ONCE before the loop starts
+
+        var sb = new System.Text.StringBuilder();
+        await foreach (var update in responseStream)
+        {
+            Write(update.Text);
+            sb.Append(update.Text);
+        }
+
+        WriteLine();
+        ResetColor();
+
+        var answerText = sb.ToString();
+
+        // Save response to semantic cache
+        if (cacheOptions.Enabled)
+        {
+            await semanticCache.SaveToCacheAsync(query, queryVector, answerText, matches);
+        }
+    }
 
     // 5) Print references underneath the answer
     WriteLine("\n--- Sources Used ---");
