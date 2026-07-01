@@ -34,3 +34,13 @@ public record IngestionOptions
     /// </summary>
     public string? CsvFilePath { get; set; }
 }
+
+/// <summary>
+/// Configuration options for the semantic cache.
+/// </summary>
+public record SemanticCacheOptions
+{
+    public bool Enabled { get; set; } = true;
+    public double SimilarityThreshold { get; set; } = 0.95;
+    public string CollectionName { get; set; } = "one_piece_cache";
+}
