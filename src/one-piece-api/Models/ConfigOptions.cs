@@ -44,3 +44,11 @@ public record SemanticCacheOptions
     public double SimilarityThreshold { get; set; } = 0.95;
     public string CollectionName { get; set; } = "one_piece_cache";
 }
+
+/// <summary>
+/// Configuration options for the semantic input filter.
+/// </summary>
+public record InputFilterOptions
+{
+    public bool Enabled { get; set; } = true;
+}

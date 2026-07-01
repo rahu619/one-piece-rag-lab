@@ -45,6 +45,10 @@ builder.Services.AddSingleton<VectorStore>(sp =>
 var cacheOptions = builder.Configuration.GetSection("SemanticCache").Get<SemanticCacheOptions>() ?? new SemanticCacheOptions();
 builder.Services.AddSingleton(cacheOptions);
 
+// Bind and register InputFilterOptions
+var filterOptions = builder.Configuration.GetSection("InputFilter").Get<InputFilterOptions>() ?? new InputFilterOptions();
+builder.Services.AddSingleton(filterOptions);
+
 builder.Services.AddSingleton<VectorStoreCollection<ulong, EpisodeRecord>>(sp =>
 {
     var store = sp.GetRequiredService<VectorStore>();
@@ -78,6 +82,8 @@ if (cacheOptions.Enabled)
     await cacheCollection.EnsureCollectionExistsAsync();
 }
 
+
+
 WriteLine("One-piece-api Node Initialized.");
 
 if (ingestionOptions!.RunOnStart && !string.IsNullOrEmpty(ingestionOptions.CsvFilePath))
@@ -110,21 +116,33 @@ while (true)
     string? query = ReadLine();
     if (string.IsNullOrWhiteSpace(query)) break;
 
-    var filterResult = inputFilter.FilterInput(query);
-    if (filterResult.IsFiltered)
+    // 1) Classify the query intent using the router
+    var intent = QueryIntent.OnePiece;
+    if (filterOptions.Enabled)
+    {
+        intent = await inputFilter.ClassifyQueryAsync(query);
+    }
+
+    if (intent == QueryIntent.General)
     {
         ForegroundColor = ConsoleColor.Blue;
-        WriteLine($"\n[Input Filtered]");
+        WriteLine("\n[General Query Route] Bypassing RAG search...");
         ResetColor();
 
         ForegroundColor = ConsoleColor.Green;
         Write("\n[Answer]: ");
-        WriteLine(filterResult.Response);
+
+        var responseStream = chatClient.GetStreamingResponseAsync(query);
+        await foreach (var update in responseStream)
+        {
+            Write(update.Text);
+        }
+        WriteLine();
         ResetColor();
         continue;
     }
 
-    // 1) Generate the query embedding
+    // 2) Generate the query embedding (only for One Piece domain queries)
     var queryEmbeddingResult = await embeddingGenerator.GenerateAsync(query);
     var queryVector = queryEmbeddingResult.Vector;
 

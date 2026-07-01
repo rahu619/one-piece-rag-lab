@@ -1,3 +1,6 @@
+using System;
+using System.Threading.Tasks;
+using one_piece_api.Tests.Mocks;
 using OnePieceApi.Retrieval;
 using Xunit;
 
@@ -5,78 +8,28 @@ namespace one_piece_api.Tests;
 
 public class InputFilterServiceTests
 {
+    private readonly MockChatClient _chatClient = new();
+
     [Theory]
     [InlineData("hello")]
     [InlineData("hi")]
     [InlineData("HEY")]
-    [InlineData("yo!")]
-    [InlineData("good morning...")]
-    [InlineData(" hola ")]
-    public void FilterInput_FiltersGreetings(string input)
-    {
-        // Arrange
-        var service = new InputFilterService();
-
-        // Act
-        var (isFiltered, response) = service.FilterInput(input);
-
-        // Assert
-        Assert.True(isFiltered);
-        Assert.Contains("Hello! I am your One Piece assistant", response);
-    }
-
-    [Theory]
-    [InlineData("thanks")]
-    [InlineData("thank you!")]
-    [InlineData("cheers")]
-    [InlineData("perfect")]
-    [InlineData("awesome")]
-    public void FilterInput_FiltersGratitude(string input)
-    {
-        // Arrange
-        var service = new InputFilterService();
-
-        // Act
-        var (isFiltered, response) = service.FilterInput(input);
-
-        // Assert
-        Assert.True(isFiltered);
-        Assert.Contains("You're welcome", response);
-    }
-
-    [Theory]
-    [InlineData("who are you?")]
-    [InlineData("what is your name")]
-    [InlineData("what can you do?")]
-    [InlineData("help")]
-    public void FilterInput_FiltersBotInfoAndHelp(string input)
-    {
-        // Arrange
-        var service = new InputFilterService();
-
-        // Act
-        var (isFiltered, response) = service.FilterInput(input);
-
-        // Assert
-        Assert.True(isFiltered);
-        Assert.Contains("One Piece retrieval assistant", response);
-    }
-
-    [Theory]
+    [InlineData("yo")]
+    [InlineData("good morning")]
     [InlineData("how are you")]
-    [InlineData("hows it going?")]
-    [InlineData("how's it going")]
-    public void FilterInput_FiltersHowAreYou(string input)
+    [InlineData("who are you")]
+    [InlineData("what is the capital of France?")]
+    [InlineData("how do I write a binary search in Python?")]
+    public async Task ClassifyQueryAsync_RoutesGeneralAndOutofDomainQueries_AsGeneral(string input)
     {
         // Arrange
-        var service = new InputFilterService();
+        var service = new InputFilterService(_chatClient);
 
         // Act
-        var (isFiltered, response) = service.FilterInput(input);
+        var intent = await service.ClassifyQueryAsync(input);
 
         // Assert
-        Assert.True(isFiltered);
-        Assert.Contains("doing great", response);
+        Assert.Equal(QueryIntent.General, intent);
     }
 
     [Theory]
@@ -84,33 +37,32 @@ public class InputFilterServiceTests
     [InlineData("What is the best episode in season 2?")]
     [InlineData("highest rated episode")]
     [InlineData("Tell me about Romance Dawn")]
-    public void FilterInput_DoesNotFilterRAGQueries(string input)
+    [InlineData("Luffy's crew members")]
+    public async Task ClassifyQueryAsync_RoutesOnePieceQueries_AsOnePiece(string input)
     {
         // Arrange
-        var service = new InputFilterService();
+        var service = new InputFilterService(_chatClient);
 
         // Act
-        var (isFiltered, response) = service.FilterInput(input);
+        var intent = await service.ClassifyQueryAsync(input);
 
         // Assert
-        Assert.False(isFiltered);
-        Assert.Empty(response);
+        Assert.Equal(QueryIntent.OnePiece, intent);
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
-    public void FilterInput_FiltersEmptyInput(string? input)
+    public async Task ClassifyQueryAsync_RoutesEmptyInput_AsGeneral(string? input)
     {
         // Arrange
-        var service = new InputFilterService();
+        var service = new InputFilterService(_chatClient);
 
         // Act
-        var (isFiltered, response) = service.FilterInput(input);
+        var intent = await service.ClassifyQueryAsync(input!);
 
         // Assert
-        Assert.True(isFiltered);
-        Assert.Contains("Please ask a question about One Piece", response);
+        Assert.Equal(QueryIntent.General, intent);
     }
 }
