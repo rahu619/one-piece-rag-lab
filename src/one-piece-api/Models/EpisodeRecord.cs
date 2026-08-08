@@ -28,6 +28,6 @@ public class EpisodeRecord
     [VectorStoreData]
     public float Rating { get; set; }
 
-    [VectorStoreVector(1536)]
+    [VectorStoreVector(Dimensions: EmbeddingSchema.Dimensions, DistanceFunction = DistanceFunction.CosineSimilarity)]
     public ReadOnlyMemory<float> OverviewEmbedding { get; set; }
 }

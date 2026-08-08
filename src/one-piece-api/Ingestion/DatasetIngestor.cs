@@ -3,6 +3,7 @@ using CsvHelper;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.VectorData;
 using OnePieceApi.Models;
+using OnePieceApi.Retrieval;
 using static System.Console;
 
 namespace OnePieceApi.Ingestion;
@@ -15,7 +16,7 @@ namespace OnePieceApi.Ingestion;
 public class DatasetIngestor(
     IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
     VectorStoreCollection<ulong, EpisodeRecord> collection,
-    OnePieceApi.Retrieval.SqliteDatabaseService sqliteDatabaseService)
+    SqliteDatabaseService sqliteDatabaseService)
 {
 
     private const int BatchSize = 50;
@@ -27,8 +28,8 @@ public class DatasetIngestor(
     /// <returns></returns>
     public async Task IngestCsvAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        // Comment out the following lines later to preserve existing data in the collection. For now, we want to start fresh for testing purposes.
-        //Delete the entire collection along with all its vectors and indexes
+        // Delete the entire collection along with all its vectors and indexes so the
+        // ingestion lifecycle matches the relational side, which is also rebuilt below.
         await collection.EnsureCollectionDeletedAsync(cancellationToken);
         WriteLine("Collection deleted successfully.");
 
@@ -37,14 +38,14 @@ public class DatasetIngestor(
         WriteLine("Fresh collection recreated and ready for indexing!");
 
         // Initialize SQL database fresh
-        sqliteDatabaseService.InitializeDatabase();
+        await sqliteDatabaseService.InitializeDatabaseAsync(cancellationToken);
         WriteLine("SQLite database initialized successfully.");
 
         using var reader = new StreamReader(filePath);
         using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
 
-        var records = csv.GetRecordsAsync<EpisodeCsvRowRecord>(cancellationToken).Take(40);
-        var batch = new List<EpisodeCsvRowRecord>();
+        var records = csv.GetRecordsAsync<EpisodeCsvRowRecord>(cancellationToken);
+        var batch = new List<EpisodeCsvRowRecord>(BatchSize);
         ulong idCounter = 1;
 
         await foreach (var row in records.WithCancellation(cancellationToken))
@@ -68,37 +69,36 @@ public class DatasetIngestor(
 
     private async Task ProcessAndUpsertBatchAsync(List<EpisodeCsvRowRecord> batch, ulong startingId, CancellationToken cancellationToken)
     {
-        // 1) Prepare texts for parallel embedding generation
-        var embeddingTasks = batch.Select(async (row, index) =>
+        // 1) Clean semantic text focused solely on textual relevance
+        var textsToEmbed = batch
+            .Select(row => $"Episode Title: {row.Name}. This episode belongs to Season {row.Season}.")
+            .ToList();
+
+        // 2) One batched embedding request per slice. Firing a request per row instead
+        // just queues behind Ollama's own parallelism limit while holding open sockets.
+        var embeddings = await embeddingGenerator.GenerateAsync(textsToEmbed, null, cancellationToken);
+
+        var recordsToUpsert = new List<EpisodeRecord>(batch.Count);
+        for (var index = 0; index < batch.Count; index++)
         {
-            // Clean semantic text focus solely on textual relevance
-            string textToEmbed = $"Episode Title: {row.Name}. This episode belongs to Season {row.Season}.";
-
-            var embeddingResult = await embeddingGenerator.GenerateAsync(textToEmbed, null, cancellationToken);
-
-            return new EpisodeRecord
+            var row = batch[index];
+            recordsToUpsert.Add(new EpisodeRecord
             {
                 Id = startingId + (ulong)index,
                 Title = row.Name,
-                Overview = textToEmbed,
-                Season = row.Season,          
-                EpisodeNumber = row.Episode,   
-                ReleaseYear = row.StartYear,  
-                Rating = row.AverageRating,    
-                OverviewEmbedding = embeddingResult.Vector
-            };
-        });
-
-        // 2) Execute all embedding generation HTTP calls concurrently
-        EpisodeRecord[] recordsToUpsert = await Task.WhenAll(embeddingTasks);
-
-        // 3) Batch upsert into Qdrant in a single database network call
-        // Depending on your SDK version, you can loop or use a native batch API if exposed:
-        foreach (var record in recordsToUpsert)
-        {
-            await collection.UpsertAsync(record, cancellationToken);
-            sqliteDatabaseService.InsertEpisode(record);
+                Overview = textsToEmbed[index],
+                Season = row.Season,
+                EpisodeNumber = row.Episode,
+                ReleaseYear = row.StartYear,
+                Rating = row.AverageRating,
+                OverviewEmbedding = embeddings[index].Vector
+            });
         }
+
+        // 3) Batch upsert into Qdrant in a single network call, then insert the relational
+        // copy in a single transaction.
+        await collection.UpsertAsync(recordsToUpsert, cancellationToken);
+        await sqliteDatabaseService.InsertEpisodesAsync(recordsToUpsert, cancellationToken);
 
         WriteLine($"[Ingestor] Successfully processed and batched index slice: {batch.Count} elements.");
     }

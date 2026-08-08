@@ -10,8 +10,10 @@ services:
       # Environment variables required for the application
       - Ollama__BaseUrl=http://ollama:11434
       - Ollama__ModelId=qwen2.5-coder:1.5b
+      - Ollama__EmbeddingModelId=nomic-embed-text
       - Ingestion__RunOnStart=true
-      - Ingestion__CsvFilePath=./data/one_piece_episodes.csv
+      # Relative paths resolve against the build output directory, and Linux is case-sensitive.
+      - Ingestion__CsvFilePath=Data/one_piece_episodes.csv
     depends_on:
       - qdrant
       - ollama

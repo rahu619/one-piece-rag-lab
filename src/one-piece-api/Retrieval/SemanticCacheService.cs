@@ -15,6 +15,39 @@ namespace OnePieceApi.Retrieval;
 public class SemanticCacheService(VectorStoreCollection<ulong, CacheRecord> cacheCollection)
 {
     /// <summary>
+    /// Looks up a byte-identical repeat of a previous query by its deterministic key.
+    /// This is a direct key fetch, so a repeated query costs neither an embedding round trip
+    /// nor a vector search.
+    /// </summary>
+    /// <param name="query">The text query.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A tuple indicating if it is a hit, the cached answer, and cached sources.</returns>
+    public async Task<(bool IsHit, string? Answer, List<EpisodeRecord>? Sources)> GetExactMatchAsync(
+        string query,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await cacheCollection.GetAsync(GetFnv1aHash(query), cancellationToken: cancellationToken);
+
+        // The key is a hash, so confirm the stored text before trusting the entry.
+        if (record is null || !string.Equals(record.Query, query, StringComparison.Ordinal))
+        {
+            return (false, null, null);
+        }
+
+        return (true, record.Answer, DeserializeSources(record.SourcesJson));
+    }
+
+    /// <summary>
+    /// Removes every cached entry. Called when the underlying dataset is rebuilt, otherwise
+    /// cached answers keep citing episodes that no longer exist.
+    /// </summary>
+    public async Task ClearAsync(CancellationToken cancellationToken = default)
+    {
+        await cacheCollection.EnsureCollectionDeletedAsync(cancellationToken);
+        await cacheCollection.EnsureCollectionExistsAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Checks the semantic cache for a query semantically similar to the provided embedding.
     /// </summary>
     /// <param name="query">The text query.</param>
@@ -40,25 +73,29 @@ public class SemanticCacheService(VectorStoreCollection<ulong, CacheRecord> cach
             if (item.Score >= similarityThreshold)
             {
                 var cachedRecord = item.Record;
-                List<EpisodeRecord>? sources = null;
-
-                if (!string.IsNullOrEmpty(cachedRecord.SourcesJson))
-                {
-                    try
-                    {
-                        sources = JsonSerializer.Deserialize<List<EpisodeRecord>>(cachedRecord.SourcesJson);
-                    }
-                    catch
-                    {
-                        // Fallback in case of deserialization errors
-                    }
-                }
-
-                return (true, cachedRecord.Answer, sources, item.Score);
+                return (true, cachedRecord.Answer, DeserializeSources(cachedRecord.SourcesJson), item.Score);
             }
         }
 
         return (false, null, null, null);
+    }
+
+    private static List<EpisodeRecord>? DeserializeSources(string sourcesJson)
+    {
+        if (string.IsNullOrEmpty(sourcesJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<EpisodeRecord>>(sourcesJson);
+        }
+        catch (JsonException)
+        {
+            // Fallback in case of deserialization errors
+            return null;
+        }
     }
 
     /// <summary>

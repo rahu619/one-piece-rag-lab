@@ -17,7 +17,7 @@ public class SemanticCacheServiceTests
         var mockCollection = new MockCacheCollection();
         var service = new SemanticCacheService(mockCollection);
         var query = "Who is Luffy's crew?";
-        var queryEmbedding = new float[1536];
+        var queryEmbedding = new float[EmbeddingSchema.Dimensions];
 
         // Act
         var (isHit, answer, sources, score) = await service.GetCachedResponseAsync(query, queryEmbedding, 0.95);
@@ -37,7 +37,7 @@ public class SemanticCacheServiceTests
         var service = new SemanticCacheService(mockCollection);
 
         var query = "Who is Luffy's crew?";
-        var vector = new float[1536];
+        var vector = new float[EmbeddingSchema.Dimensions];
         vector[0] = 1.0f;
 
         var cachedAnswer = "Luffy's crew is the Straw Hat Pirates.";
@@ -70,7 +70,7 @@ public class SemanticCacheServiceTests
         var service = new SemanticCacheService(mockCollection);
 
         var query = "Who is Luffy's crew?";
-        var vectorA = new float[1536];
+        var vectorA = new float[EmbeddingSchema.Dimensions];
         vectorA[0] = 1.0f;
 
         var cachedAnswer = "Luffy's crew is the Straw Hat Pirates.";
@@ -79,7 +79,7 @@ public class SemanticCacheServiceTests
         await service.SaveToCacheAsync(query, vectorA, cachedAnswer, sources);
 
         // Query with an orthogonal vector (similarity = 0.0)
-        var vectorB = new float[1536];
+        var vectorB = new float[EmbeddingSchema.Dimensions];
         vectorB[1] = 1.0f;
 
         // Act
@@ -89,6 +89,90 @@ public class SemanticCacheServiceTests
         Assert.False(isHit);
         Assert.Null(answer);
         Assert.Null(cachedSources);
+    }
+
+    [Fact]
+    public async Task GetExactMatchAsync_ReturnsHit_WithoutNeedingAnEmbedding()
+    {
+        // Arrange
+        var mockCollection = new MockCacheCollection();
+        var service = new SemanticCacheService(mockCollection);
+
+        var query = "Who is Luffy's crew?";
+        var vector = new float[EmbeddingSchema.Dimensions];
+        vector[0] = 1.0f;
+
+        await service.SaveToCacheAsync(query, vector, "Luffy's crew is the Straw Hat Pirates.", [
+            new EpisodeRecord { Id = 1, Title = "Romance Dawn", Rating = 8.5f }
+        ]);
+
+        // Act
+        var (isHit, answer, sources) = await service.GetExactMatchAsync(query);
+
+        // Assert
+        Assert.True(isHit);
+        Assert.Equal("Luffy's crew is the Straw Hat Pirates.", answer);
+        Assert.NotNull(sources);
+        Assert.Equal("Romance Dawn", sources[0].Title);
+    }
+
+    [Fact]
+    public async Task GetExactMatchAsync_ReturnsMiss_ForADifferentQuery()
+    {
+        // Arrange
+        var mockCollection = new MockCacheCollection();
+        var service = new SemanticCacheService(mockCollection);
+
+        await service.SaveToCacheAsync("Who is Luffy's crew?", new float[EmbeddingSchema.Dimensions], "An answer.", []);
+
+        // Act
+        var (isHit, answer, sources) = await service.GetExactMatchAsync("Who is Zoro?");
+
+        // Assert
+        Assert.False(isHit);
+        Assert.Null(answer);
+        Assert.Null(sources);
+    }
+
+    [Fact]
+    public async Task GetExactMatchAsync_ReturnsMiss_WhenTheStoredTextDoesNotMatchTheKey()
+    {
+        // A hash key can collide, so the stored query text has to be confirmed before it is trusted.
+        var mockCollection = new MockCacheCollection();
+        var service = new SemanticCacheService(mockCollection);
+
+        var query = "Who is Luffy's crew?";
+        await mockCollection.UpsertAsync(new CacheRecord
+        {
+            Id = SemanticCacheService.GetFnv1aHash(query),
+            Query = "a different query that happened to land on this key",
+            Answer = "Wrong answer.",
+            QueryEmbedding = new float[EmbeddingSchema.Dimensions]
+        });
+
+        // Act
+        var (isHit, answer, _) = await service.GetExactMatchAsync(query);
+
+        // Assert
+        Assert.False(isHit);
+        Assert.Null(answer);
+    }
+
+    [Fact]
+    public async Task ClearAsync_EmptiesTheCache()
+    {
+        // Arrange
+        var mockCollection = new MockCacheCollection();
+        var service = new SemanticCacheService(mockCollection);
+
+        await service.SaveToCacheAsync("Who is Luffy's crew?", new float[EmbeddingSchema.Dimensions], "An answer.", []);
+        Assert.Single(mockCollection.Store);
+
+        // Act
+        await service.ClearAsync();
+
+        // Assert
+        Assert.Empty(mockCollection.Store);
     }
 
     [Fact]

@@ -12,10 +12,17 @@ public record OllamaOptions
     public required string BaseUrl { get; set; }
 
     /// <summary>
-    /// Gets or sets the model ID for the Ollama API client. This specifies which model to use for generating embeddings and other tasks. 
+    /// Gets or sets the model ID used for chat completion, routing, and SQL generation.
     /// The model ID should correspond to a valid model available in the Ollama service.
     /// </summary>
     public required string ModelId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the model ID used for embeddings. A dedicated embedding model retrieves far
+    /// better than a chat model's hidden states, so this is kept separate from <see cref="ModelId"/>.
+    /// Changing it changes the vector dimensions, which invalidates every existing Qdrant collection.
+    /// </summary>
+    public required string EmbeddingModelId { get; set; }
 }
 
 /// <summary>
