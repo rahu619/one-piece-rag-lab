@@ -9,6 +9,18 @@
 *.userosscache
 *.sln.docstates
 
+# AI coding agents (share settings.json, keep local overrides + transcripts out)
+.claude/settings.local.json
+.claude/projects/
+.qwen/
+.aider*
+.cursorignore
+
+# SQLite artifacts
+*.db
+*.db-shm
+*.db-wal
+
 # IDE/editor
 .vscode/*
 !.vscode/settings.json

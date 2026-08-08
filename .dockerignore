@@ -17,6 +17,10 @@ Thumbs.db
 # Tests and docs not required for runtime image
 tests/
 README.md
+CLAUDE.md
+QWEN.md
+.claude/
+.qwen/
 
 # Environment/secrets
 .env

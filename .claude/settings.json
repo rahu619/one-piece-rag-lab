@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(dotnet test:*)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet clean:*)",
+      "Bash(dotnet format:*)",
+      "Bash(dotnet list:*)",
+      "Bash(dotnet --info)",
+      "Bash(dotnet --version)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(docker compose -f .devcontainer/docker-compose.yml ps:*)",
+      "Bash(docker compose -f .devcontainer/docker-compose.yml logs:*)",
+      "Bash(docker ps:*)",
+      "Read(//Users/rahulrajan/one-piece-rag/**)"
+    ],
+    "deny": [
+      "Read(//Users/rahulrajan/one-piece-rag/**/bin/**)",
+      "Read(//Users/rahulrajan/one-piece-rag/**/obj/**)",
+      "Read(//Users/rahulrajan/one-piece-rag/.env)",
+      "Read(//Users/rahulrajan/one-piece-rag/.env.*)",
+      "Read(//Users/rahulrajan/one-piece-rag/**/appsettings.Development.json)",
+      "Read(//Users/rahulrajan/one-piece-rag/**/secrets.json)"
+    ]
+  }
+}
