@@ -1,0 +1,6 @@
+{
+    "routingAccuracy": 0.8,
+    "qaPassRate": 0.6,
+    "safetyBlockRate": 1.0,
+    "safetyFalsePositiveMax": 0.0
+}

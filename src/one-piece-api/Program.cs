@@ -1,17 +1,20 @@
-using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.VectorData;
 using Microsoft.SemanticKernel.Connectors.Qdrant;
 using OllamaSharp;
 using OnePieceApi.Config;
 using OnePieceApi.Ingestion;
 using OnePieceApi.Models;
+using OnePieceApi.Observability;
+using OnePieceApi.Pipeline;
 using OnePieceApi.Retrieval;
+using OnePieceApi.Safety;
 using Qdrant.Client;
 
 using static System.Console;
@@ -45,11 +48,15 @@ builder.Services.AddSingleton<VectorStore>(sp =>
     return new QdrantVectorStore(client, true);
 });
 
-// Bind and register SemanticCacheOptions
+// Bind and register options
 var cacheOptions = builder.Configuration.GetSection("SemanticCache").Get<SemanticCacheOptions>() ?? new SemanticCacheOptions();
 builder.Services.AddSingleton(cacheOptions);
 
+var safetyOptions = builder.Configuration.GetSection("Safety").Get<SafetyOptions>() ?? new SafetyOptions();
+builder.Services.AddSingleton(safetyOptions);
 
+var observabilityOptions = builder.Configuration.GetSection("Observability").Get<ObservabilityOptions>() ?? new ObservabilityOptions();
+builder.Services.AddSingleton(observabilityOptions);
 
 builder.Services.AddSingleton<VectorStoreCollection<ulong, EpisodeRecord>>(sp =>
 {
@@ -72,13 +79,25 @@ builder.Services.AddTransient<SearchService>();
 builder.Services.AddSingleton<SemanticCacheService>();
 builder.Services.AddSingleton<SqliteDatabaseService>();
 
+// Safety guardrails
+builder.Services.AddSingleton<InputGuardrails>();
+builder.Services.AddSingleton<OutputGuardrails>();
+
+// Observability
+builder.Services.AddSingleton<TraceStore>();
+builder.Services.AddSingleton<PipelineMetrics>();
+builder.Services.AddSingleton<LlmInstrumentation>();
+
+// The query pipeline itself
+builder.Services.AddSingleton<QueryEngine>();
+
 using var host = builder.Build();
 
 var ingestor = host.Services.GetRequiredService<DatasetIngestor>();
-var searchService = host.Services.GetRequiredService<SearchService>();
-var chatClient = host.Services.GetRequiredService<IChatClient>(); // Get the LLM client
 var embeddingGenerator = host.Services.GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>();
 var semanticCache = host.Services.GetRequiredService<SemanticCacheService>();
+var queryEngine = host.Services.GetRequiredService<QueryEngine>();
+var metrics = host.Services.GetRequiredService<PipelineMetrics>();
 
 // Fail fast on a model/schema mismatch. Otherwise the width only surfaces as an opaque Qdrant
 // error part-way through ingestion.
@@ -100,11 +119,8 @@ if (cacheOptions.Enabled)
     await cacheCollection.EnsureCollectionExistsAsync();
 }
 
-// The router prompt asks for a single word, so cap generation rather than paying for a
-// full-length response on every query. Temperature 0 keeps routing deterministic.
-var routingChatOptions = new ChatOptions { MaxOutputTokens = 5, Temperature = 0 };
-
 WriteLine("One-piece-api Node Initialized.");
+WriteLine("Commands: /help for help, /stats for observability metrics.");
 
 if (ingestionOptions!.RunOnStart && !string.IsNullOrEmpty(ingestionOptions.CsvFilePath))
 {
@@ -153,194 +169,126 @@ while (true)
     string? query = ReadLine();
     if (string.IsNullOrWhiteSpace(query)) break;
 
-    // 1) A byte-identical repeat is a direct key fetch, so check it before spending an
-    // embedding round trip on the semantic lookup.
-    if (cacheOptions.Enabled)
+    if (query.Trim() is "/quit" or "/exit")
     {
-        var (isExactHit, exactAnswer, exactSources) = await semanticCache.GetExactMatchAsync(query);
-        if (isExactHit && exactAnswer != null)
+        break;
+    }
+
+    if (query.Trim() == "/help")
+    {
+        PrintHelp();
+        continue;
+    }
+
+    if (query.Trim() == "/stats")
+    {
+        WriteLine();
+        WriteLine(metrics.RenderReport());
+        continue;
+    }
+
+    var tokenProgress = new Progress<string>(token => Write(token));
+
+    var result = await queryEngine.ExecuteAsync(
+        query,
+        tokenProgress,
+        onStage: evt =>
         {
-            PrintCacheHit(exactAnswer, exactSources, score: null);
-            continue;
-        }
-    }
+            switch (evt.Stage)
+            {
+                case PipelineStage.Routing:
+                    ForegroundColor = ConsoleColor.Yellow;
+                    WriteLine("Routing query...");
+                    ResetColor();
+                    break;
 
-    // 2) Embed lazily: only the semantic cache lookup and the VECTOR route need a vector,
-    // so a cache-disabled SQL or GENERAL query never pays for one.
-    ReadOnlyMemory<float>? cachedQueryVector = null;
-    async Task<ReadOnlyMemory<float>> GetQueryVectorAsync()
+                case PipelineStage.SemanticCacheMiss:
+                    ForegroundColor = ConsoleColor.Yellow;
+                    WriteLine("\n[Semantic Cache Miss] Processing query...");
+                    ResetColor();
+                    break;
+
+                case PipelineStage.RouteSql:
+                    ForegroundColor = ConsoleColor.Yellow;
+                    WriteLine("\n[Route: SQL Database Query]");
+                    ResetColor();
+                    break;
+
+                case PipelineStage.RouteVector:
+                    ForegroundColor = ConsoleColor.Yellow;
+                    WriteLine("\n[Route: Semantic Vector Search]");
+                    ResetColor();
+                    break;
+
+                case PipelineStage.RouteGeneral:
+                    ForegroundColor = ConsoleColor.Yellow;
+                    WriteLine("\n[Route: General Conversation]");
+                    ResetColor();
+                    break;
+
+                case PipelineStage.SqlGenerated:
+                    ForegroundColor = ConsoleColor.Blue;
+                    WriteLine($"Executing SQL: {evt.Detail}");
+                    ResetColor();
+                    break;
+
+                case PipelineStage.AnswerStart:
+                    ForegroundColor = ConsoleColor.Green;
+                    Write("\n[Answer]: ");
+                    break;
+            }
+        });
+
+    switch (result.Outcome)
     {
-        cachedQueryVector ??= (await embeddingGenerator.GenerateAsync(query)).Vector;
-        return cachedQueryVector.Value;
+        case QueryOutcome.Blocked:
+            ForegroundColor = ConsoleColor.Red;
+            WriteLine("\n[Blocked by Safety Guardrail]");
+            WriteLine(result.Answer);
+            ResetColor();
+            break;
+
+        case QueryOutcome.Refused:
+            ForegroundColor = ConsoleColor.Red;
+            WriteLine("\n[Answer Withheld by Output Guardrail]");
+            WriteLine(result.Answer);
+            ResetColor();
+            break;
+
+        case QueryOutcome.NoMatches:
+            WriteLine(result.Answer);
+            break;
+
+        case QueryOutcome.Answered when result.Cache == CacheOutcome.ExactHit:
+            PrintCacheHit(result.Answer, result.Sources.ToList(), score: null);
+            break;
+
+        case QueryOutcome.Answered when result.Cache == CacheOutcome.SemanticHit:
+            PrintCacheHit(result.Answer, result.Sources.ToList(), result.CacheSimilarity);
+            break;
+
+        case QueryOutcome.Answered:
+            // The answer was already streamed by the token progress callback.
+            WriteLine();
+            ResetColor();
+
+            if (result.Sources.Count > 0)
+            {
+                WriteLine("\n--- Sources Used ---");
+                foreach (var episode in result.Sources)
+                {
+                    WriteLine($"* {episode.Title} (Rating: {episode.Rating})");
+                }
+            }
+            break;
     }
 
-    if (cacheOptions.Enabled)
-    {
-        var (isHit, cachedAnswer, cachedSources, similarityScore) = await semanticCache.GetCachedResponseAsync(
-            query,
-            await GetQueryVectorAsync(),
-            cacheOptions.SimilarityThreshold);
-
-        if (isHit && cachedAnswer != null)
-        {
-            PrintCacheHit(cachedAnswer, cachedSources, similarityScore);
-            continue;
-        }
-
-        ForegroundColor = ConsoleColor.Yellow;
-        WriteLine("\n[Semantic Cache Miss] Processing query...");
-        ResetColor();
-    }
-
-    // 3) Classify the query intent using the LLM router
-    var classificationPrompt = $"""
-        You are a query router. Classify the user query into exactly one of three categories:
-        - "SQL" (if the query requires analytical or quantitative calculations, counts, averages, sorting, or groupings about ratings, episodes, seasons, or release years)
-        - "VECTOR" (if the query is asking about character descriptions, storylines, plot details, relationships, or what happens in the episodes)
-        - "GENERAL" (if the query is a greeting, general chitchat, help request, or a general knowledge/coding question not about One Piece)
-
-        Respond with exactly one word: either "SQL", "VECTOR", or "GENERAL". Do not write anything else.
-
-        Query: {query}
-        Category:
-        """;
-
-    ForegroundColor = ConsoleColor.Yellow;
-    WriteLine("Routing query...");
+    ForegroundColor = ConsoleColor.DarkGray;
+    WriteLine($"— trace: {result.TraceId}, latency: {result.Elapsed.TotalMilliseconds:F0} ms");
     ResetColor();
-
-    var routingResponse = await chatClient.GetResponseAsync(classificationPrompt, routingChatOptions);
-    var intent = ParseIntent(routingResponse.Text);
-
-    if (intent == "SQL")
-    {
-        ForegroundColor = ConsoleColor.Yellow;
-        WriteLine("\n[Route: SQL Database Query]");
-        ResetColor();
-
-        var sqlPrompt = $"""
-            You are a SQLite query generator. Write a single SQLite SELECT statement to answer the user query.
-            Database schema:
-            Table: Episodes (
-                Id INT,
-                Title TEXT,
-                Overview TEXT,
-                Season INT,
-                EpisodeNumber INT,
-                ReleaseYear INT,
-                Rating REAL
-            )
-
-            Respond with ONLY the raw SQL query. Do not write markdown, explanations, or any other text.
-
-            Query: {query}
-            SQL:
-            """;
-
-        var sqlGenResponse = await chatClient.GetResponseAsync(sqlPrompt);
-        var sqlQuery = StripCodeFence(sqlGenResponse.Text);
-
-        ForegroundColor = ConsoleColor.Blue;
-        WriteLine($"Executing SQL: {sqlQuery}");
-        ResetColor();
-
-        var dbService = host.Services.GetRequiredService<SqliteDatabaseService>();
-        var sqlResult = await dbService.ExecuteSqlQueryAsync(sqlQuery);
-
-        var answerPrompt = $"""
-            You are an expert One Piece assistant. Answer the user's question accurately using the structured SQLite database results provided below.
-
-            Database Results:
-            {sqlResult}
-
-            User Question: {query}
-            Answer:
-            """;
-
-        var answer = await StreamAnswerAsync(answerPrompt);
-
-        if (cacheOptions.Enabled)
-        {
-            await semanticCache.SaveToCacheAsync(query, await GetQueryVectorAsync(), answer, []);
-        }
-    }
-    else if (intent == "VECTOR")
-    {
-        ForegroundColor = ConsoleColor.Yellow;
-        WriteLine("\n[Route: Semantic Vector Search]");
-        ResetColor();
-
-        var matches = await searchService.SearchAsync(await GetQueryVectorAsync(), limit: 5);
-        if (matches.Count == 0)
-        {
-            WriteLine("No matching episodes found.");
-            continue;
-        }
-
-        var sortedMatches = matches.OrderByDescending(e => e.Rating).ToList();
-
-        // Invariant formatting: on a comma-decimal locale a rating would otherwise reach the
-        // model as "9,1", disagreeing with the SQL route and reading as a list separator.
-        var contextData = string.Join("\n", sortedMatches.Select(e => string.Create(
-            CultureInfo.InvariantCulture,
-            $"- Title: {e.Title}, Season: {e.Season}, Episode: {e.EpisodeNumber}, Year: {e.ReleaseYear}, Rating: {e.Rating}\n  Overview: {e.Overview}")));
-
-        var answerPrompt = $"""
-            You are an expert One Piece assistant. Answer the user's question accurately using ONLY the provided context dataset below.
-
-            Context Dataset (ordered from highest rating to lowest rating):
-            {contextData}
-
-            User Question: {query}
-            Answer:
-            """;
-
-        var answer = await StreamAnswerAsync(answerPrompt);
-
-        if (cacheOptions.Enabled)
-        {
-            await semanticCache.SaveToCacheAsync(query, await GetQueryVectorAsync(), answer, sortedMatches);
-        }
-
-        WriteLine("\n--- Sources Used ---");
-        foreach (var episode in sortedMatches)
-        {
-            WriteLine($"* {episode.Title} (Rating: {episode.Rating})");
-        }
-    }
-    else
-    {
-        ForegroundColor = ConsoleColor.Yellow;
-        WriteLine("\n[Route: General Conversation]");
-        ResetColor();
-
-        var answer = await StreamAnswerAsync(query);
-
-        if (cacheOptions.Enabled)
-        {
-            await semanticCache.SaveToCacheAsync(query, await GetQueryVectorAsync(), answer, []);
-        }
-    }
 }
 
 return 0;
-
-async Task<string> StreamAnswerAsync(string prompt)
-{
-    ForegroundColor = ConsoleColor.Green;
-    Write("\n[Answer]: ");
-
-    var sb = new System.Text.StringBuilder();
-    await foreach (var update in chatClient.GetStreamingResponseAsync(prompt))
-    {
-        Write(update.Text);
-        sb.Append(update.Text);
-    }
-
-    WriteLine();
-    ResetColor();
-    return sb.ToString();
-}
 
 static void PrintCacheHit(string answer, List<EpisodeRecord>? sources, double? score)
 {
@@ -366,32 +314,19 @@ static void PrintCacheHit(string answer, List<EpisodeRecord>? sources, double? s
     }
 }
 
-static string ParseIntent(string? responseText)
+static void PrintHelp()
 {
-    if (string.IsNullOrWhiteSpace(responseText))
-    {
-        return "GENERAL";
-    }
+    WriteLine("""
 
-    // Small models echo their prompt, and the router prompt names every category. Searching
-    // the whole response with Contains would therefore always match the first-listed category,
-    // so match the leading token instead.
-    var firstToken = responseText
-        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-        .FirstOrDefault()?
-        .Trim('"', '\'', '.', ':', '*', '`')
-        .ToUpperInvariant();
+        One Piece RAG assistant commands:
+          <query>    Ask about One Piece episodes, ratings, seasons, or storylines
+          /stats     Show observability metrics for this session (routes, cache, guardrails, tokens)
+          /help      Show this help
+          /quit      Exit
 
-    return firstToken is "SQL" or "VECTOR" ? firstToken : "GENERAL";
-}
-
-static string StripCodeFence(string text)
-{
-    var sql = text.Trim();
-
-    if (sql.StartsWith("```sql", StringComparison.OrdinalIgnoreCase)) sql = sql[6..];
-    else if (sql.StartsWith("```")) sql = sql[3..];
-    if (sql.EndsWith("```")) sql = sql[..^3];
-
-    return sql.Trim();
+        Safety: queries are screened for prompt injection, personal data, and harmful
+        content before they reach the model, and answers are screened before they are
+        shown. See docs/ai-safety.md for the full policy.
+        Traces: every query and LLM call is written to the observability directory.
+        """);
 }

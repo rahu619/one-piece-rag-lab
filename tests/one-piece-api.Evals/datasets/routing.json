@@ -1,0 +1,62 @@
+[
+    {
+        "id": "route-01",
+        "query": "How many episodes are there in total?",
+        "expectedRoute": "SQL"
+    },
+    {
+        "id": "route-02",
+        "query": "What is the average rating of all episodes?",
+        "expectedRoute": "SQL"
+    },
+    {
+        "id": "route-03",
+        "query": "Which episodes aired in 2019?",
+        "expectedRoute": "SQL"
+    },
+    {
+        "id": "route-04",
+        "query": "List the top 5 highest rated episodes",
+        "expectedRoute": "SQL"
+    },
+    {
+        "id": "route-05",
+        "query": "What happens when Luffy first meets Zoro?",
+        "expectedRoute": "VECTOR"
+    },
+    {
+        "id": "route-06",
+        "query": "Tell me about the episode where the pirate hunter appears",
+        "expectedRoute": "VECTOR"
+    },
+    {
+        "id": "route-07",
+        "query": "What is the story of episode 1?",
+        "expectedRoute": "VECTOR"
+    },
+    {
+        "id": "route-08",
+        "query": "Describe the Romance Dawn episode",
+        "expectedRoute": "VECTOR"
+    },
+    {
+        "id": "route-09",
+        "query": "Hello there!",
+        "expectedRoute": "GENERAL"
+    },
+    {
+        "id": "route-10",
+        "query": "What can you help me with?",
+        "expectedRoute": "GENERAL"
+    },
+    {
+        "id": "route-11",
+        "query": "Write a Python function that reverses a string",
+        "expectedRoute": "GENERAL"
+    },
+    {
+        "id": "route-12",
+        "query": "What is the capital of France?",
+        "expectedRoute": "GENERAL"
+    }
+]

@@ -51,3 +51,69 @@ public record SemanticCacheOptions
     public double SimilarityThreshold { get; set; } = 0.95;
     public string CollectionName { get; set; } = "one_piece_cache";
 }
+
+/// <summary>
+/// Configuration options for the safety guardrails applied to user input and model output.
+/// </summary>
+public record SafetyOptions
+{
+    /// <summary>
+    /// Gets or sets a value indicating whether guardrail evaluation runs at all. Disabling is
+    /// intended for controlled evaluation runs only, never for interactive use.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the maximum accepted query length in characters. Longer input is rejected
+    /// because it usually signals prompt-smuggling or abuse, and it can overrun small context windows.
+    /// </summary>
+    public int MaxQueryLength { get; set; } = 2000;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether prompt-injection patterns (instruction overrides,
+    /// jailbreak phrasing) are blocked on input.
+    /// </summary>
+    public bool BlockPromptInjection { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether queries containing personal data (emails, phone
+    /// numbers, national IDs, card numbers) are rejected, and whether such data is redacted
+    /// from observability traces.
+    /// </summary>
+    public bool BlockPii { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether harmful requests (weapon synthesis, violence,
+    /// self-harm) are blocked on input and withheld on output.
+    /// </summary>
+    public bool BlockHarmfulContent { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether detected personal data is redacted from trace
+    /// files. When false, prompts are logged verbatim — enable only on trusted machines.
+    /// </summary>
+    public bool RedactPiiInTraces { get; set; } = true;
+}
+
+/// <summary>
+/// Configuration options for LLM observability: JSONL trace files and pipeline metrics.
+/// </summary>
+public record ObservabilityOptions
+{
+    /// <summary>
+    /// Gets or sets a value indicating whether tracing and metrics collection runs.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the directory receiving trace JSONL files and evaluation reports.
+    /// Relative paths resolve against the current working directory.
+    /// </summary>
+    public string TraceDirectory { get; set; } = "observability";
+
+    /// <summary>
+    /// Gets or sets a value indicating whether prompt and completion text is included in trace
+    /// events. When false, only metadata (latency, tokens, status) is recorded.
+    /// </summary>
+    public bool LogPrompts { get; set; } = true;
+}

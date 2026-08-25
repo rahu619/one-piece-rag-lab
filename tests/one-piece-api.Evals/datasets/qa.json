@@ -1,0 +1,50 @@
+[
+    {
+        "id": "qa-01",
+        "query": "How many episodes are in the dataset?",
+        "expectedRoute": "SQL",
+        "factsAll": ["958"]
+    },
+    {
+        "id": "qa-02",
+        "query": "Which episode has the highest rating?",
+        "expectedRoute": "SQL",
+        "factsAny": ["808", "9.6", "kanashiki"]
+    },
+    {
+        "id": "qa-03",
+        "query": "In what year did the first episode air?",
+        "expectedRoute": "SQL",
+        "factsAll": ["1999"]
+    },
+    {
+        "id": "qa-04",
+        "query": "What is the title of the first episode?",
+        "expectedRoute": "SQL",
+        "factsAny": ["i'm luffy", "im luffy", "the man who will become the pirate king"]
+    },
+    {
+        "id": "qa-05",
+        "query": "What season does episode 483 belong to?",
+        "expectedRoute": "SQL",
+        "factsAny": ["season 1", "season: 1"]
+    },
+    {
+        "id": "qa-06",
+        "query": "Which episodes were released in 2021?",
+        "expectedRoute": "SQL",
+        "factsAny": ["958", "957", "garp", "legendary battle"]
+    },
+    {
+        "id": "qa-07",
+        "query": "Which episode is called The Great Swordsman Appears?",
+        "expectedRoute": "VECTOR",
+        "factsAny": ["the great swordsman appears", "pirate hunter", "episode: 2", "episode 2"]
+    },
+    {
+        "id": "qa-08",
+        "query": "Which episode features the legendary battle between Garp and Roger?",
+        "expectedRoute": "VECTOR",
+        "factsAny": ["garp", "roger", "legendary battle"]
+    }
+]
